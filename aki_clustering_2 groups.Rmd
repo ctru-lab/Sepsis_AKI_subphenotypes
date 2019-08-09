@@ -1,0 +1,1105 @@
+---
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+```{r}
+#Project: Leveraging public domain EHR data (from MIMIC) to identify subpopulations in AKI.
+#@author: ckumardeep@gmail.com
+#Date: 09MAY18
+##borrow steps for "criteria selection" from AD {}PENDING{}
+#rm(list=ls(all=TRUE))
+library(tidyverse)
+#library(xlsx)
+library(pheatmap)
+library(impute)
+library(caret)
+library("scatterplot3d") # load
+library(gplots)
+
+
+```
+
+##read vitals
+```{r}
+setwd("C:/Users/Ross/Desktop/research/Girash/aki/codeandfiles")
+
+
+kkk=read_tsv('vitals.tsv')
+kkk=as.data.frame(kkk)
+rownames(kkk)=kkk$id
+kkk=kkk[,-1]
+dim(kkk)
+
+kkkfull = kkk
+
+#remove cols with >60% values
+#kkk=vitaldf[,colMeans(is.na(vitaldf))< 0.9]; dim(kkk)
+kkk=kkk[,colMeans(is.na(kkk))< 0.4]; dim(kkk)
+
+#ROSS NOTE added remove rows with 50% missing
+kkk = kkk[-which(rowMeans(is.na(kkk)) > 0.5), ]
+
+colnames(kkk)
+dim(kkk)
+which(is.na(kkk))
+
+#idx=which(grepl('Dialysis',colnames(kkk)))
+#kkk=kkk[,-idx]; 
+#dim(kkk)
+
+
+#imputation
+#library(impute)
+set.seed(1)
+kkk_monu=kkk
+
+#ross added remove rows with 80% missing
+
+#xxx_impute=impute.knn(as.matrix(transformed), k = 5)
+#kkk_impute=impute.knn(as.matrix(t(transformed)), k = 2) #CAUTION feature/rows, samples/cols #ignore it
+kkk_impute=impute.knn(t(kkk_monu), k = 2)
+#kkk_impute=impute.knn(as.matrix((transformed)), k = 2)
+kkk_impute=(kkk_impute$data)
+any(is.na(kkk_impute))
+kkk_impute=data.frame(t(kkk_impute),check.names = F); dim(kkk_impute) #CAUTION 
+#-
+#library(caret)
+#First transformation
+preprocessParams <- preProcess(kkk_impute, method=c("YeoJohnson"))
+kkk_transformed1 <- predict(preprocessParams, kkk_impute)
+kd=kkk_transformed1
+kd=as.matrix(kd)
+class(kd) <- "character"
+class(kd) <- "numeric"
+kd=as.data.frame(kd)
+kkk_transformed1=kd
+
+```
+
+##generate lab features: labs (missing values heatmap [suppl. fig2])
+```{r}
+mall=read_tsv('labs.tsv')
+mall=as.data.frame(mall)
+rownames(mall) <- mall$id
+mall=mall[,-1]
+
+idx=which(grepl('_mean',colnames(mall)))
+#mallmed=mall[,-idx];
+mallmed = mall
+dim(mallmed);head(colnames(mallmed))
+
+#=stats on full data median/sd/n
+#remove cols with all NAs
+xxfull=mallmed[, -which(colMeans(is.na(mallmed)) == 1)];dim(xxfull)
+
+#remove cols with >60% NAs
+xxxfull=xxfull[,colMeans(is.na(xxfull))< 0.4]; dim(xxxfull)
+
+#-
+
+#====CAUTION===#
+xxxx=xxxfull #for latest strategy #for input2/4
+#--------------#
+
+#remove creatinine
+#idx=which(grepl('50912',colnames(xxxx)))
+#xxxx=xxxx[,-idx]; 
+#dim(xxxx)
+
+idx=which(grepl('50910',colnames(xxxx)))
+xxxx=xxxx[,-idx]; 
+dim(xxxx)
+
+#idx=which(grepl('50911',colnames(xxxx)))
+#xxxx=xxxx[,-idx]; 
+#dim(xxxx)
+
+#idx=which(grepl('51082',colnames(xxxx)))
+#xxxx=xxxx[,-idx]; 
+#dim(xxxx)
+
+
+
+
+
+#-
+#=make sure 3 features are in triplicate in above feature set
+#a) albumin: 
+#which(grepl('1751',colnames(xxxx)))
+#[1]  15  59 103
+
+#b) bicarbonate: 
+#which(grepl('1959',colnames(xxxx)))
+
+#c) potassium: idx=
+#which(grepl('6298',colnames(xxxx)))
+
+#igonre it
+#cross-check how these are now automatically in feature space.
+#xxx_monu=merge(xxxx,kkk,by.x = 'row.names',by.y = 'row.names')
+#rownames(xxx_monu)=xxx_monu[,1]
+#xxx_monu=xxx_monu[,-1]
+#xxx_monu[1:5,1:5]
+#dim(xxx_monu)
+#-
+
+#=
+#remove creatinine at the first place:
+
+ 
+dim(xxxx)
+xxx_monu=xxxx 
+#kd=t(xxx_monu)
+#=
+#imputation
+#library(impute)
+set.seed(1)
+
+#ROSS NOTE added remove rows with >50% missing
+xxx_monu = xxx_monu[-which(rowMeans(is.na(xxx_monu)) > 0.5), ] 
+
+#xxx_impute=impute.knn(as.matrix(transformed), k = 5)
+#xxx_impute=impute.knn(as.matrix(#transformed), k = 2)
+xxx_impute=impute.knn(t(xxx_monu), k = 2) #CAUTION; as per tutorial #3 rows with more than 50 % entries missing; for xxx #ignore it
+xxx_impute=(xxx_impute$data)
+#xxx_imputex=(xxx_imputex$data)
+any(is.na(xxx_impute))
+xxx_impute=data.frame(t(xxx_impute),check.names = F)   #ignore it # dont know but unusual values are fed e.g. 
+dim(xxx_impute)
+#[1] 1865  105
+#-
+
+#YJ transform on positive values + NA values
+#library(caret)
+preprocessParams <- preProcess(xxx_impute, method=c("YeoJohnson"))
+xxx_transformed1 <- predict(preprocessParams, xxx_impute)
+#-
+
+
+#=Get following 2 rows which features are those
+#Warning message:
+#In knnimp(x, k, maxmiss = rowmax, maxp = maxp) :
+#  2 rows with more than 50 % entries missing;
+# mean imputation used for these rows
+#-
+
+#=======input3=========#
+
+#ip3=merge(xxx_impute,kkk_impute,by.x='row.names',by.y='row.names')
+ip3=merge(xxx_transformed1,kkk_transformed1,by.x='row.names',by.y='row.names')
+rownames(ip3)=ip3[,1]
+ip3=ip3[,-1]
+ip3[1:5,1:5];dim(ip3)
+colnames(ip3) = (gsub("^X","",colnames(ip3)))
+colnames(ip3) = (gsub("[.]","-",colnames(ip3)))
+correlationMatrix <- cor(ip3)
+highlyCorrelated <- findCorrelation(correlationMatrix, cutoff=0.5) #CRUCIAL input3
+xxx_imputee=ip3[,-highlyCorrelated]
+#xxx_imputee=ip3
+dim(xxx_imputee)
+##[1] 1865   63
+#---------#
+
+dim(xxx_imputee)
+colnames(xxx_imputee)
+which(grepl('761',colnames(xxx_imputee)))
+##xxx_imputee=xxx_imputee[,-idx]
+#-
+#manual addition; CAUTION, MANUAL CHECK
+which(grepl('1751',colnames(xxx_imputee)))
+which(grepl('1959',colnames(xxx_imputee)))
+which(grepl('6298',colnames(xxx_imputee)))
+listwa=c('1959-6_50803:1963-8_50882_median','1959-6_50803:1963-8_50882_n','1959-6_50803:1963-8_50882_sd','6298-4_50822:2823-3_50971_n','1751-7_50862_sd') 
+##listwa=c('1959-6_50803:1963-8_50882_median','1959-6_50803:1963-8_50882_n','6298-4_50822:2823-3_50971_n')
+#input1
+
+#listwa=c('1751-7_50862_n') #input2
+
+#-
+#kd=xxx_impute[,listwa]  #input1
+
+#=
+
+kd=ip3[,listwa] #input3
+#-
+
+#==#
+###xxx_imputee=merge(xxx_imputee,kd,by.x='row.names',by.y='row.names')
+###rownames(xxx_imputee)=xxx_imputee[,1]
+###xxx_imputee=xxx_imputee[,-1]
+#--#
+
+colnames(xxx_imputee) 
+#-
+
+#=
+#2nd transformation
+xxx_imputee=data.frame(xxx_imputee,check.names = F)+0.001
+head(xxx_imputee)
+preprocessParams <- preProcess(xxx_imputee, method=c("BoxCox"))
+transformed2 <- predict(preprocessParams, xxx_imputee)
+any(is.na(transformed2))
+head(transformed2)
+#norm
+x_transformed_labs = transformed2#log(transformed2 + 1-min(transformed2))
+head(x_transformed_labs);dim(x_transformed_labs)
+#1865   64 #input1
+#[1] 1865   105  #input2
+#========for input3=======#
+input3=x_transformed_labs
+input3[1:5,1:5]
+#-----finish----#
+
+```
+##core clustering steps ([figure1] (make b'ful use cytoscape or gephi or online tsne))
+```{r}
+#{}PENDING: is output of kmeans is same order of that of input samples?{}
+#https://stackoverflow.com/questions/8278966/how-can-i-get-cluster-number-correspond-to-data-using-k-means-clustering-techniq
+##core clustering steps ([figure1] (make b'ful use cytoscape or gephi or online tsne))
+dfkd=x_transformed_labs
+dim(dfkd)
+
+
+
+colnames(dfkd) <- gsub('_', '', colnames(dfkd))
+#silhouttee plot
+
+library(factoextra)
+library(NbClust)
+library(Rtsne)
+library(caret)
+
+
+# Silhouette method
+#pdf('silhouette1.pdf')
+#pdf('silhouette2.pdf')
+# set.seed(1)
+# fviz_nbclust(dfkd, kmeans, method = "silhouette")+
+#   labs(subtitle = "Silhouette method")
+# dev.off()
+#i is decided based on above plot
+i=2
+set.seed(1)
+
+#ROSS NOTE - was breaking things ask kumar
+#tsne_out <- Rtsne(as.matrix(dfkd),dims=3,theta = 0,perplexity = 40)
+#ROSS NOTE replaced tsne_out with dfkd
+km.res <- kmeans(dfkd, centers = i, nstart = 25)
+#FINAL CLUSTER LABELS
+# table(km.res$cluster) 
+# #   1    2 
+# #1084  781 
+# library(Rtsne)
+# library(caret)
+# set.seed(1) # for reproducibility
+# #tsne_out <- Rtsne(as.matrix(dfkd),dims=3) #input1
+# #tsne_out <- Rtsne(as.matrix(dfkd),dims=3,theta = 0,perplexity = 60) #input3
+# ###########tsne_out <- Rtsne(as.matrix(dfkd),dims=3,theta = 0,perplexity = 40) #input v2
+#  
+# dev.off()
+# ####scatterplot3d(x=tsne_out$Y[,2],y=tsne_out$Y[,3],z=tsne_out$Y[,1],
+# ####              color = c("red","green","blue")[km.res$cluster],
+# ####              angle = -20, scale.y =1)
+# 
+# ####clusters with only training data
+# 
+# set.seed(1)
+# #.6 = 60% split
+# percent_split = .8
+# split_index <- as.integer(nrow(dfkd)*percent_split)
+# train <- dfkd[0:split_index, ]
+# test <- dfkd[(split_index +1):nrow(dfkd),]
+# km.res2 <- kmeans(train, centers = i, nstart = 25)
+# 
+# table(km.res2$cluster) 
+#  
+# ######tsne_out2 <- Rtsne(as.matrix(train),dims=3,theta = 0,perplexity = 40) #input v2
+# #dev.off() 
+# ###scatterplot3d(x=tsne_out2$Y[,2],y=tsne_out2$Y[,3],z=tsne_out2$Y[,1],
+# ##              color = c("red","green","blue")[km.res2$cluster],
+# ##              angle = -20, scale.y =1)
+# 
+# 
+# #check if the clustering with 80% of data matches that with 100%
+# sum(km.res$cluster[0:as.integer(nrow(dfkd)*percent_split)] == km.res2$cluster)/as.integer(nrow(dfkd)*percent_split)
+# 
+
+
+####jacard score
+#install.packages("fpc")
+
+#library(fpc)
+#compute jacard score
+#clust_boot <- clusterboot(dfkd, clustermetho =kmeansCBI, krange = (2), seed =1)
+#clust_boot
+
+
+
+
+```
+
+```{r}
+# #merge the cluster info with the training data
+# train_classifier <- merge(train, km.res2$cluster, by=0, all=TRUE)
+# 
+# features <- c(sprintf("f%02d", seq(1,88)),"label")
+# colnames(train_classifier) <- features
+# 
+# 
+# library(randomForest)
+# model1 <- randomForest(as.factor(label)~ ., data = train_classifier)
+# ##train random forest on cluster classification
+# test_classifier <- merge(km.res$cluster[(split_index +1):nrow(dfkd)], test, by=0, all=TRUE)
+# colnames(test_classifier) <- features
+# Prediction <- predict(model1, test_classifier)
+# sum(km.res$cluster[(split_index +1):nrow(dfkd)] == Prediction)/as.integer(nrow(dfkd)*(1-percent_split))
+
+
+
+```
+
+```{r}
+
+#autoencoder
+library(h2o)
+h2o.init()
+
+#makes data feedable to h20
+h2oframe = as.h2o(dfkd)
+
+features <- colnames(dfkd)
+seed(1)
+model_one = h2o.deeplearning(x = features, training_frame = h2oframe,
+autoencoder = TRUE,
+reproducible = TRUE,
+seed = 148,
+#archieture of the autoencoder
+hidden = c(45,30,20,30,45), epochs = 100,activation = "Tanh")
+
+icd.anon = h2o.anomaly(model_one, h2oframe, per_feature=F)
+head(icd.anon)
+err <- as.data.frame(icd.anon)
+summary(err$Reconstruction.MSE, na.rm = T)
+
+# err_means <- apply(err, 2, function(x) mean(x))
+# plot(err_means)
+plot(sort(err$Reconstruction.MSE), main='Reconstruction Error')
+varimp <- h2o.varimp(model_one)
+varimp
+#saves the middle layer of the autoencoder
+reduced_features <- h2o.deepfeatures(model_one, data = h2oframe, layer = 3) %>%
+  as.data.frame()
+
+rownames(reduced_features) <- rownames(dfkd)
+
+# 
+# library(fpc)
+# 
+# clust_boot <- clusterboot(features_icd, clustermetho =kmeansCBI, krange = (2:6), seed =1)
+# clust_boot
+# clusters <- clust_boot$result$partition
+# pca <- prcomp(features_icd)
+# ggplot(data= NULL , aes(x = pca$x[,1] , y =pca$x[,2], colour = factor(clusters)))+geom_point()
+#   
+# 
+# ggplot(data= NULL , aes(x = features_icd[,1] , y =features_icd[,2], colour = factor(clusters)))+geom_point()
+# 
+# 
+# set.seed(1)
+# tsne <- Rtsne(features_icd, perplexity = 70)
+# ggplot(data= NULL , aes(x =tsne$Y[,1], y =tsne$Y[,2], colour = factor(clusters)))+geom_point()
+
+```
+
+```{r}
+set.seed(1)
+#feed reduced features into kmeans
+km.res <- kmeans(reduced_features, centers = 2, nstart = 25)
+
+#fviz_nbclust(reduced_features, kmeans, method = "silhouette", print.summary = TRUE)+
+#  labs(subtitle = "Silhouette method")
+
+#install.packages("fpc")
+
+library(fpc)
+
+#clust_boot <- clusterboot(dfkd, clustermethod =kmeansCBI, krange = (3), seed =1)
+#clust_boot
+
+# outcomes=read_tsv('hospital_outcome_1865.tsv')
+# outcomes=as.data.frame(outcomes) s
+# rownames(outcomes)=outcomes$id
+# outcomes$Cluster <- NULL
+# combined <- merge(outcomes, kkk, by.x = 'cluster', by.y = 'row.names', all=TRUE)
+# combined <- merge(combined, mall, by.x = 'cluster', by.y = 'row.names', all=TRUE)
+# combined <- merge(combined, data.frame(km.res$cluster), by.x = "cluster", by.y = "row.names")
+# 
+# #$Ho: mean alive of aki cluster 1 = mean alive of cluster 2
+# t.test(combined$diehosp ~ combined$km.res.cluster, mu =0, alt="two.sided")
+
+###generation of outcome data ###
+outcomes=read.table('outcomes\\martin_akipatients_diedhosp.csv', sep = " ", header = TRUE)
+outcomes=as.data.frame(outcomes)
+rownames(outcomes) <- outcomes$subject_id
+
+
+clusters = data.frame( km.res$cluster)
+
+
+clusters$subject_id <- rownames(clusters)
+de <- merge((clusters), (outcomes), by = "subject_id", all.x = T)
+de[c("expire_flag")][is.na(de[c("expire_flag")])] <- 0
+#tapply(de$expire_flag , de$km.res.cluster, mean) 
+#res.aov <- aov(de$expire_flag ~ de$km.res.cluster, data = de)
+# Summary of the analysis
+#summary(res.aov)
+#tapply(de$expire_flag , de$km.res.cluster, mean) 
+
+all_outcomes <- de[,c("subject_id","km.res.cluster","expire_flag")]
+
+x1 = t.test(de$expire_flag ~ de$km.res.cluster, mu =0, alt="two.sided")
+
+#feed the reduced feature set into tsne 
+#tsne_out <- Rtsne(as.matrix(reduced_features),dims=3,theta = 0,perplexity = 200) #input v2
+ 
+dev.off()
+#plot the tsne
+pdf("plot10.pdf",width=6,height=5)
+scatterplot3d(x=tsne_out$Y[,2],y=tsne_out$Y[,3],z=tsne_out$Y[,1],
+              color = c("red","green","blue")[km.res$cluster],
+              angle = 300, scale.y =.5)
+dev.off()
+
+#         
+#         
+#         ################ LOTS OF ADDING OUTCOME RESULTS
+ outcomes=read.table('outcomes\\martin_akipatients_within30.csv', sep = " ", header = TRUE)
+ outcomes=as.data.frame(outcomes)
+ rownames(outcomes) <- outcomes$subject_id
+# 
+# 
+ clusters = data.frame( km.res$cluster)
+# 
+# 
+ clusters$subject_id <- rownames(clusters)
+ de <- merge((clusters), (outcomes), by = "subject_id", all.x = T)
+ de[c("expire_flag")][is.na(de[c("expire_flag")])] <- 0
+tapply(de$expire_flag , de$km.res.cluster, mean) 
+
+
+x2 = t.test(de$expire_flag ~ de$km.res.cluster, mu =0, alt="two.sided")
+
+de <- de[,c("subject_id","km.res.cluster","expire_flag")]
+
+de$within_30 <- de$expire_flag
+de$expire_flag <- NULL
+all_outcomes <- merge(all_outcomes, de)
+# 
+# 
+# ################
+outcomes=read.table('outcomes\\martin_akipatients_within90.csv', sep = " ", header = TRUE)
+outcomes=as.data.frame(outcomes)
+rownames(outcomes) <- outcomes$subject_id
+
+
+clusters = data.frame( km.res$cluster)
+
+
+clusters$subject_id <- rownames(clusters)
+de <- merge((clusters), (outcomes), by = "subject_id", all.x = T)
+de[c("expire_flag")][is.na(de[c("expire_flag")])] <- 0
+x3 = t.test(de$expire_flag ~ de$km.res.cluster, mu =0, alt="two.sided")
+
+df <- data.frame("within 90",x3$estimate[1],x3$estimate[1],.002)
+names(df) <- c("Result", "Group 1 mean", "Group 2 mean", "p-value")
+
+de <- de[,c("subject_id","km.res.cluster","expire_flag")]
+
+de$within_90 <- de$expire_flag
+de$expire_flag <- NULL
+all_outcomes <- merge(all_outcomes, de)
+
+
+
+################
+outcomes=read.table('outcomes\\martin_akipatients_diedafter30.csv', sep = " ", header = TRUE)
+outcomes=as.data.frame(outcomes)
+rownames(outcomes) <- outcomes$subject_id
+
+
+clusters = data.frame(km.res$cluster)
+
+
+clusters$subject_id <- rownames(clusters)
+de <- merge((clusters), (outcomes), by = "subject_id", all.x = T)
+de[c("expire_flag")][is.na(de[c("expire_flag")])] <- 0
+x4 = t.test(de$expire_flag ~ de$km.res.cluster, mu =0, alt="two.sided")
+
+
+de <- data.frame("died after 30",x4$estimate[1],x4$estimate[1],x4$p.value)
+names(de) <- c("Result", "Group 1 mean", "Group 2 mean", "p-value")
+
+de <- de[,c("subject_id","km.res.cluster","expire_flag")]
+
+de$after_30 <- de$expire_flag
+de$expire_flag <- NULL
+all_outcomes <- merge(all_outcomes, de)
+
+
+
+# ################
+ outcomes=read.table('outcomes\\martin_akipatients_alive.csv', sep = " ", header = TRUE)
+ outcomes=as.data.frame(outcomes)
+ rownames(outcomes) <- outcomes$subject_id
+# 
+# 
+ clusters = data.frame( km.res$cluster)
+# 
+# 
+clusters$subject_id <- rownames(clusters)
+ id <- rownames(clusters)
+ de <- merge((clusters), (outcomes), by = "subject_id", all.x = T)
+ de[c("expire_flag")][is.na(de[c("expire_flag")])] <- 1
+#  tapply(de$expire_flag , de$km.res.cluster, mean) 
+#  
+# 
+#  
+# xxx_imputee$subject_id <- rownames(xxx_imputee)
+# de <- merge((clusters), (xxx_imputee), by = "subject_id", all.x = T)
+# #tapply(de$ , de$km.res.cluster, mean,na.rm = TRUE) 
+# library(psych)
+# describe(de[de$km.res.cluster == 1,])
+# describe(de[de$km.res.cluster == 2,])
+# describe(de[de$km.res.cluster == 3,])
+
+x5 = t.test(de$expire_flag ~ de$km.res.cluster, mu =0, alt="two.sided")
+
+de <- de[,c("subject_id","km.res.cluster","expire_flag")]
+
+de$alive <- de$expire_flag
+de$expire_flag <- NULL
+all_outcomes <- merge(all_outcomes, de)
+
+###again adding the outcome results just have to prep dialysis data a little more
+outcomes=read.table('outcomes\\martin_akipatients_dialysis.csv', sep=',',header = TRUE)
+ outcomes=as.data.frame(outcomes)
+
+ 
+clusters = data.frame( km.res$cluster)
+clusters$subject_id <- rownames(clusters)
+ id <- rownames(clusters)
+ de <- merge((clusters), (outcomes), by = "subject_id", all.x = T)
+de$dialysis <- de$hadm_id
+de$dialysis[is.na(de$short_title)] <- 0
+de$dialysis[!(de$dialysis == 0)] <- 1
+x6 = t.test(de$dialysis ~ de$km.res.cluster, mu =0, alt="two.sided")
+
+de <- de[,c("subject_id","km.res.cluster","dialysis")]
+
+all_outcomes <- merge(all_outcomes, de)
+
+#################################WITHIN 28
+
+outcomes=read.table('outcomes\\martin_akipatients_28daymortality.csv', sep = ",", header =TRUE, fill = TRUE)
+outcomes=as.data.frame(outcomes)
+rownames(outcomes) <- outcomes$subject_id
+
+
+clusters = data.frame( km.res$cluster)
+
+
+clusters$subject_id <- rownames(clusters)
+de <- merge((clusters), (outcomes), by = "subject_id", all.x = T)
+de[c("day28flag")][is.na(de[c("day28flag")])] <- 0
+x7 = t.test(de$day28flag ~ de$km.res.cluster, mu =0, alt="two.sided")
+
+
+de <- de[,c("subject_id","km.res.cluster","day28flag","admittime")]
+
+
+all_outcomes <- merge(all_outcomes, de)
+
+#df <- data.frame("28 day mortality post aki",x7$estimate[1],x7$estimate[1],.002)
+#names(df) <- c("Result", "Group 1 mean", "Group 2 mean", "p-value")
+
+
+
+#de <- data.frame("aki patients alive",x$estimate[1],x$estimate[1],x$p.value)
+#names(de) <- c("Result", "Group 1 mean", "Group 2 mean", "p-value")
+
+#df <- rbind(df, de)
+
+# 
+# 
+# ##### los
+# outcomes=read.table('outcomes\\martin_akipatients_los.csv', sep = ",", header = TRUE)
+# outcomes=as.data.frame(outcomes)
+# rownames(outcomes) <- outcomes$subject_id
+# 
+# clusters = data.frame( km.res$cluster)
+# 
+# 
+# clusters$subject_id <- rownames(clusters)
+# de <- merge((clusters), (outcomes), by = "subject_id", all)
+# head(de)
+
+####saves the generated outcome data in a pretty manner###############
+# sprintf("died hosp: group 1 mean %f, group 2 mean %f, p-value = %f",x1$estimate[1],x1$estimate[2],x1$p.value)
+# sprintf("within 30: group 1 mean %f, group 2 mean %f, p-value = %f",x2$estimate[1],x2$estimate[2],x2$p.value)
+# sprintf("within 90: group 1 mean %f, group 2 mean %f, p-value = %f",x3$estimate[1],x3$estimate[2],x3$p.value)
+# sprintf("died after 30: group 1 mean %f, group 2 mean %f, p-value = %f",x4$estimate[1],x4$estimate[2],x4$p.value)
+# sprintf("aki patients alive: group 1 mean %f, group 2 mean %f, p-value = %f",x5$estimate[1],x5$estimate[2],x5$p.value)
+# sprintf("aki patients on dialysis: group 1 mean %f, group 2 mean %f, p-value = %f",x6$estimate[1],x6$estimate[2],x6$p.value)
+# sprintf("28 day mortality post aki: group 1 mean %f, group 2 mean %f, p-value = %f",x7$estimate[1],x7$estimate[2],x7$p.value)
+# 
+
+###compute the jacard score for the reduced features and make it pretty
+library(fpc)
+#compute jacard score
+clust_boot <- clusterboot(reduced_features, clustermetho =kmeansCBI, krange = (2), seed =1, count =TRUE)
+#make it into a nice table
+jac <- matrix(c(clust_boot$bootmean[1],clust_boot$bootmean[2]),ncol=2,byrow=TRUE)
+colnames(jac) <- c("group 1","Group 2")
+rownames(jac) <- c("Clusterwise Jaccard bootstrap mean")
+jac <- as.table(jac) 
+jac
+
+#shows the optimal number of clusters 
+fviz_nbclust(reduced_features, kmeans, method = "silhouette", print.summary = TRUE)
+
+###stores outcome results in a pretty manner
+results <- matrix(c(x1$estimate[1]*100,x1$estimate[2]*100,x1$p.value,x2$estimate[1]*100,x2$estimate[2]*100,x2$p.value,x3$estimate[1]*100,x3$estimate[2]*100,x3$p.value,x4$estimate[1]*100,x4$estimate[2]*100,x4$p.value,x5$estimate[1]*100,x5$estimate[2]*100,x5$p.value,x6$estimate[1]*100,x6$estimate[2]*100,x6$p.value,x7$estimate[1]*100,x7$estimate[2]*100,x7$p.value),ncol=3,byrow=TRUE)
+colnames(results) <- c("Group 1 Mean (%)","Group 2 Mean (%)", "p-value")
+rownames(results) <- c("died hosp","within 30","within 90","died after 30","aki patients alive", "aki patients dialysis", "28 day mortality post aki")
+results <- as.table(results)
+results
+
+
+```
+```{r}
+clusters = data.frame( km.res$cluster)
+#clusters$subject_id <- rownames(clusters)
+# id <- rownames(clusters)
+de <- merge((clusters), (reduced_features), by = "row.names", all.x = T)
+de2 <- de[,-1]
+
+#de3 <- aggregate(de2[, 2:5], list(de2$km.res.cluster), mean)
+#de4 <- de3[,-1]
+#library(gplots)
+#heatmap(scale(de4))
+
+#library(pheatmap)
+
+#cal_z_score <- function(x){
+#  (x - mean(x)) / sd(x)
+#}
+
+
+#data_subset_norm <- t(apply(de2[,-1], 1, cal_z_score))
+#rownames(data_subset_norm) <- NULL
+#pheatmap(data_subset_norm, annotation_row = de2[0])
+
+#generate heatmap for latent features
+#anno <- data.frame(Cluster= factor(clusters$km.res.cluster))
+#rownames(anno)<- rownames(reduced_features)
+
+####generate the heatmap#######
+####set the colors for the clusters
+
+condition_colors <- unlist(lapply(de2$km.res.cluster,function(x){
+  if(grepl("1",x)) '#FFC0CB' #pink
+  else if(grepl('2',x)) '#808080' #grey
+  
+}))
+
+input <- as.matrix(t(de2[,-1]))
+pdf("plot100.pdf",width=6,height=5)
+heatmap.2(input, trace="none", density="none", col=bluered(20), cexRow=1, cexCol=0.2, ColSideColors=condition_colors, scale="row", dendrogram = c("row"),xlab = "Subjects", ylab = "Latent Features",labRow = FALSE, labCol = FALSE)
+
+legend(0.8,0.9,legend=c("Cluster 1","Cluster 2"),fill=c('#808080','#FFC0CB'),cex=0.5)
+dev.off()
+
+#pheatmap(annotation = anno, cluster_cols = T)
+```
+```{r}
+#####fill in the names for the labs########
+
+
+merged_data <-merge(xxx_monu, kkk_monu, by = "row.names")
+
+lab_item_names=read.table('D_LABITEMS.csv', sep = ",", header = TRUE)
+lab_item_names=as.data.frame(lab_item_names)
+ 
+for (name in lab_item_names$ITEMID){
+  colnames(merged_data) <- gsub(name,paste(lab_item_names$LABEL[which(lab_item_names$ITEMID == name)],lab_item_names$FLUID[which(lab_item_names$ITEMID == name)],sep =  "__"), colnames(merged_data))
+} 
+ 
+
+
+de <- merge((clusters$km.res.cluster), (merged_data), by = "row.names")
+de[1] <- NULL
+
+
+
+
+
+
+
+
+
+
+#p <- ggplot(data = de) + geom_boxplot(mapping = aes(x = de$km.res.cluster, y =de$`Spont RRmedian`, group = de$km.res.cluster))
+#p + stat_compare_means(mapping = aes(x = de$km.res.cluster, y =de$`Spont RRmedian`, group = de$km.res.cluster)) 
+
+
+#de <- merge((clusters), (dfkd), by = "row.names", all.x = T)
+#de[1] <- NULL
+
+#library(reshape2)
+
+#labs_melt <- melt(data.frame(de, Cluster= de$km.res.cluster), id.vars = c("Cluster"))
+#labs_melt$Cluster <- ifelse(labs_melt$Cluster==1, "Subphenotype 1", "Subphenotype 2")
+#head(labs_melt)
+
+
+#fun_mean <- function(x){
+#  return(data.frame(y=mean(x),label=mean(x,na.rm=T)))}
+
+#de_pre <- merge((clusters), (xxx_imputee), by = "row.names", all.x = T)
+#de <- de_pre
+t.test(de$Basophils__Blood_median ~ de_pre$x, mu = 0, alt="two.sided")
+t.test(de_pre$Bands__Blood_median ~ de_pre$x, mu = 0, alt="two.sided")
+table(de$e)
+
+#de <- de_pre
+#de[1] <- NULL
+#de[2] <- NULL
+
+de <- as.matrix(sapply(de, as.numeric))  
+colnames(de)[colnames(de)=="de"] <- "x"
+
+de[, -c(1)] <- scale(de[, -c(1)])
+
+
+de1 = de[de[, "x"] == 1,]
+de2 = de[de[, "x"] == 2,]
+
+mode(de1) = "numeric"
+de1 <- data.frame(de1)
+
+mode(de2) = "numeric"
+de2 <- data.frame(de2)
+
+
+
+de1[1] <- NULL
+de1[1] <- NULL
+de2[1] <- NULL
+de2[1] <- NULL
+
+de1 <- as.matrix(sapply(de1, as.numeric)) 
+de2 <- as.matrix(sapply(de2, as.numeric)) 
+
+
+
+
+cluster1 <- colMeans(de1, na.rm=TRUE)
+cluster2 <- colMeans(de2, na.rm=TRUE)
+
+#de1$cluster <- 1
+#de2$cluster <- 2
+
+de <- as.data.frame(rbind(cluster1, cluster2))
+rownames(de) <- c("Subphenotype 1", "Subphenotype 2")
+
+#get just the median variable to plot
+idx=which(grepl('_median',colnames(de)))
+de=de[,idx]; 
+dim(de)
+
+de_range <- de[1,] - de[2,]
+de_range_25 <- de_range[which( de_range >.1 | de_range < -.1)]
+
+de <- de[which(colnames(de) %in% colnames(de_range_25))]
+
+
+
+for (name in colnames(de)[-length(colnames(de))]){
+  print(t.test(de_pre[,c(name)] ~ de_pre$km.res.cluster, mu = 0, alt="two.sided"))
+}
+#  
+#}
+
+
+
+
+
+#write.csv(de_n,"de_std.csv")
+
+#diff <- colMeans(de1)-colMeans(de2)
+#order(diff)
+#diff <- as.data.frame(diff[order(diff)])
+
+#diff$features <- rownames(diff)
+
+library(ggplot)
+library(reshape2)
+de$id = rownames(de)
+
+#clean up the variable names for the graphs
+colnames(de) <- gsub('_median', '', colnames(de))
+colnames(de) <- gsub('__Blood', '(Blood)', colnames(de))
+colnames(de) <- gsub('__Urine', '(Urine)', colnames(de))
+colnames(de) <- gsub('__Urine', '(Urine)', colnames(de))
+colnames(de) <- gsub('_', ' ', colnames(de))
+colnames(de) <- gsub('#2', '', colnames(de))
+#colnames(de) <- gsub('..', ' ', colnames(de))
+#colnames(de) <- gsub('.', ' ', colnames(de))
+
+rs <- melt(de)
+
+
+####plot difference in z-score between median variable by cluster
+pdf("plotlastplz2.pdf",width=10,height=6)
+ggplot(rs, aes(x=reorder(variable, value), y=value, color =id)) + geom_point(aes(color =id)) +stat_summary(aes(x=reorder(variable, value), y=value, group =id), fun.y=mean, geom="line") + theme(axis.text.x=element_text(angle=60,hjust=1,vjust=1),axis.title.x=element_blank())+ ylab("Standardized Variable Value") + scale_colour_manual(name="", values = c("Subphenotype 1"="blue", "Subphenotype 2"="red"))
+dev.off()
+
+ggplot(rs, aes(x=variable, y=value)) + 
+  geom_boxplot(outlier.colour="red", outlier.shape=8,
+                outlier.size=4)
+
+```
+
+
+```{r}
+age_and_sex=read.table('PATIENTS.csv', sep = ",", header =TRUE, fill = TRUE)
+age_and_sex=as.data.frame(age_and_sex)[,c("SUBJECT_ID","GENDER","DOB")]
+
+clusters$SUBJECT_ID <- rownames(clusters)
+race=read.table('ADMISSIONS.csv', sep = ",", header =TRUE, fill = TRUE)
+race=as.data.frame(race)[,c("SUBJECT_ID","ETHNICITY","ADMISSION_TYPE")]
+adjust_able_factors <- merge(race, age_and_sex, by = "SUBJECT_ID")
+adjust_able_factors <- merge(clusters, adjust_able_factors, by = "SUBJECT_ID")
+
+service=read.table('SERVICES.csv', sep = ",", header =TRUE, fill = TRUE)
+service=as.data.frame(service)[,c("SUBJECT_ID","CURR_SERVICE")]
+adjust_able_factors <- merge(service, adjust_able_factors, by = "SUBJECT_ID")
+
+
+diagnoses=read.table('DIAGNOSES_ICD.csv', sep = ",", header =TRUE, fill = TRUE)
+diagnoses=as.data.frame(diagnoses)[,c("SUBJECT_ID","ICD9_CODE")]
+
+#comordbity of hiv
+adjust_able_factors$hiv <- 0
+
+adjust_able_factors[adjust_able_factors$SUBJECT_ID %in% diagnoses[diagnoses$ICD9_CODE %in% c("42", "7953", "79571", "V08","V6544"), "SUBJECT_ID"], "hiv"] <- 1
+
+#comordbity of hypertension
+adjust_able_factors$hypertension <- 0
+
+adjust_able_factors[adjust_able_factors$SUBJECT_ID %in% diagnoses[diagnoses$ICD9_CODE %in% c("4010", "4011", "4019"), "SUBJECT_ID"], "hypertension"] <- 1
+
+#comordbity of chf
+adjust_able_factors$chf <- 0
+
+adjust_able_factors[adjust_able_factors$SUBJECT_ID %in% diagnoses[diagnoses$ICD9_CODE %in% c("4280"), "SUBJECT_ID"], "chf"] <- 1
+
+#comordbity of diabetes
+adjust_able_factors$diabetes <- 0
+
+adjust_able_factors[adjust_able_factors$SUBJECT_ID %in% diagnoses[diagnoses$ICD9_CODE %in% c("25000","25001","25002","25003","25010","25011","25012", "25013", "25020", "25021","24900","24901","24910","24911","24920","24921","24930","24931","24940","24941","24950","24951","24960","24961","24970","24971","24980","24981","24990","24991"), "SUBJECT_ID"], "diabetes"] <- 1
+
+
+#comordbity of diabetes
+adjust_able_factors$chroniclung <- 0
+
+adjust_able_factors[adjust_able_factors$SUBJECT_ID %in% diagnoses[diagnoses$ICD9_CODE %in% c("51883"), "SUBJECT_ID"], "chroniclung"] <- 1
+
+#comordbity of liver
+adjust_able_factors$liver <- 0
+
+adjust_able_factors[adjust_able_factors$SUBJECT_ID %in% diagnoses[diagnoses$ICD9_CODE %in% c("5712","5713","57140","57141","5715","5718","5719"), "SUBJECT_ID"], "liver"] <- 1
+
+#comordbity of pvd
+adjust_able_factors$pvd <- 0
+
+adjust_able_factors[adjust_able_factors$SUBJECT_ID %in% diagnoses[diagnoses$ICD9_CODE %in% c("44389","4439"), "SUBJECT_ID"], "pvd"] <- 1
+
+
+
+adjust_able_factors <-adjust_able_factors[!duplicated(adjust_able_factors$SUBJECT_ID),]
+
+all_outcomes$SUBJECT_ID <- all_outcomes$subject_id
+all_outcomes$subject_id <- NULL
+
+
+adjustable_factors <- merge(adjust_able_factors, all_outcomes, by = "SUBJECT_ID")
+adjustable_factors <- adjustable_factors[!duplicated(adjustable_factors$SUBJECT_ID),]
+adjustable_factors <- adjustable_factors[ , -which(names(adjustable_factors) %in% c("km.res.cluster.y","Result","Group 1 mean","Group 2 mean","p-value" ))]
+
+adjustable_factors$DOB <- substr(adjustable_factors$DOB, 0, 10)
+adjustable_factors$date_diff <- as.Date(as.character(adjustable_factors$admittime), format="%m/%d/%Y")-
+                  as.Date(as.character(adjustable_factors$DOB), format="%Y-%m-%d")
+
+adjustable_factors$age <- adjustable_factors$date_diff/365
+
+
+adjustable_factors$ETHNICITY[adjustable_factors$ETHNICITY == "ASIAN - ASIAN INDIAN"] <- "ASIAN"
+adjustable_factors$ETHNICITY[adjustable_factors$ETHNICITY == "ASIAN - CAMBODIAN"] <- "ASIAN"
+adjustable_factors$ETHNICITY[adjustable_factors$ETHNICITY == "ASIAN - CHINESE"] <- "ASIAN"
+adjustable_factors$ETHNICITY[adjustable_factors$ETHNICITY == "ASIAN - FILIPINO"] <- "ASIAN"
+adjustable_factors$ETHNICITY[adjustable_factors$ETHNICITY == "ASIAN - VIETNAMESE"] <- "ASIAN"
+adjustable_factors$ETHNICITY[adjustable_factors$ETHNICITY == "ASIAN - KOREAN"] <- "ASIAN"
+adjustable_factors$ETHNICITY[adjustable_factors$ETHNICITY == "BLACK/AFRICAN"] <- "BLACK/AFRICAN AMERICAN"
+adjustable_factors$ETHNICITY[adjustable_factors$ETHNICITY == "BLACK/CAPE VERDEAN"] <- "BLACK/AFRICAN AMERICAN"
+adjustable_factors$ETHNICITY[adjustable_factors$ETHNICITY == "BLACK/HAITIAN"] <- "BLACK/AFRICAN AMERICAN"
+adjustable_factors$ETHNICITY[adjustable_factors$ETHNICITY == "CARIBBEAN ISLAND"] <- "BLACK/AFRICAN AMERICAN"
+adjustable_factors$ETHNICITY[adjustable_factors$ETHNICITY == "HISPANIC/LATINO - CUBAN"] <- "HISPANIC OR LATINO"
+adjustable_factors$ETHNICITY[adjustable_factors$ETHNICITY == "HISPANIC/LATINO - DOMINICAN"] <- "HISPANIC OR LATINO"
+adjustable_factors$ETHNICITY[adjustable_factors$ETHNICITY == "HISPANIC/LATINO - HONDURAN"] <- "HISPANIC OR LATINO"
+adjustable_factors$ETHNICITY[adjustable_factors$ETHNICITY == "HISPANIC/LATINO - MEXICAN"] <- "HISPANIC OR LATINO"
+adjustable_factors$ETHNICITY[adjustable_factors$ETHNICITY == "HISPANIC/LATINO - PUERTO RICAN"] <- "HISPANIC OR LATINO"
+adjustable_factors$ETHNICITY[adjustable_factors$ETHNICITY == "PORTUGUESE"] <- "HISPANIC OR LATINO"
+adjustable_factors$ETHNICITY[adjustable_factors$ETHNICITY == "SOUTH AMERICAN"] <- "HISPANIC OR LATINO"
+adjustable_factors$ETHNICITY[adjustable_factors$ETHNICITY == "WHITE - BRAZILIAN"] <- "WHITE"
+adjustable_factors$ETHNICITY[adjustable_factors$ETHNICITY == "WHITE - EASTERN EUROPEAN"] <- "WHITE"
+adjustable_factors$ETHNICITY[adjustable_factors$ETHNICITY == "WHITE - OTHER EUROPEAN"] <- "WHITE"
+adjustable_factors$ETHNICITY[adjustable_factors$ETHNICITY == "WHITE - RUSSIAN"] <- "WHITE"
+adjustable_factors$ETHNICITY[adjustable_factors$ETHNICITY == "UNKNOWN/NOT SPECIFIED"] <- "OTHER"
+adjustable_factors$ETHNICITY[adjustable_factors$ETHNICITY == "UNABLE TO OBTAIN"] <- "OTHER"
+adjustable_factors$ETHNICITY[adjustable_factors$ETHNICITY == "PATIENT DECLINED TO ANSWER"] <- "OTHER"
+adjustable_factors$ETHNICITY[adjustable_factors$ETHNICITY == "MULTI RACE ETHNICITY"] <- "OTHER"
+adjustable_factors$ETHNICITY[adjustable_factors$ETHNICITY == "MIDDLE EASTERN"] <- "OTHER"
+adjustable_factors$ETHNICITY[adjustable_factors$ETHNICITY == "MIDDLE EASTERN"] <- "OTHER"
+adjustable_factors$ETHNICITY[adjustable_factors$ETHNICITY == "AMERICAN INDIAN/ALASKA NATIVE"] <- "OTHER"
+adjustable_factors$ETHNICITY[adjustable_factors$ETHNICITY == "AMERICAN INDIAN/ALASKA NATIVE FEDERALLY RECOGNIZED TRIBE"] <- "OTHER"
+
+####prep to adjust by creatinine
+xxfull$SUBJECT_ID <- rownames(xxfull)
+xxfull <-  subset(xxfull, select=c('SUBJECT_ID', '50912_median', '51300_median','50811_median','51221_median','51265_median','50983_median','50902_median','50882_median','51006_median','50862_median'))
+  
+
+adjustable_factors <- merge(adjustable_factors, xxfull, by = "SUBJECT_ID")
+
+kkkfull$SUBJECT_ID <- rownames(kkkfull)
+kkkfull <- subset(kkkfull, select=c("SUBJECT_ID","Temperature C (calc)_median","Manual BP [Diastolic]_median","Arterial Blood Pressure systolic_median","Spont RR_median","Mixed Venous O2% Sat_median"))
+
+adjustable_factors <- merge(adjustable_factors, kkkfull, by = "SUBJECT_ID")
+
+
+
+
+glm.fit <- glm(expire_flag ~ km.res.cluster.x, data = adjustable_factors, family = binomial)
+summary(glm.fit)
+
+
+glm.fit <- glm(expire_flag ~ km.res.cluster.x + GENDER + age + ETHNICITY, data = adjustable_factors, family = binomial)
+summary(glm.fit)
+
+
+glm.fit <- glm(within_30 ~ km.res.cluster.x, data = adjustable_factors, family = binomial)
+summary(glm.fit)
+
+glm.fit <- glm(within_30 ~ km.res.cluster.x + GENDER + age + ETHNICITY, data = adjustable_factors, family = binomial)
+summary(glm.fit)
+
+glm.fit <- glm(within_90 ~ km.res.cluster.x, data = adjustable_factors, family = binomial)
+summary(glm.fit)
+
+glm.fit <- glm(within_90 ~ km.res.cluster.x + GENDER + age + ETHNICITY, data = adjustable_factors, family = binomial)
+summary(glm.fit)
+
+glm.fit <- glm(alive ~ km.res.cluster.x, data = adjustable_factors, family = binomial)
+summary(glm.fit)
+
+glm.fit <- glm(alive ~ km.res.cluster.x + GENDER + age + ETHNICITY, data = adjustable_factors, family = binomial)
+summary(glm.fit)
+
+glm.fit <- glm(dialysis ~ km.res.cluster.x, data = adjustable_factors, family = binomial)
+summary(glm.fit)
+
+glm.fit <- glm(dialysis ~ km.res.cluster.x + GENDER + age + ETHNICITY + `50912_median`, data = adjustable_factors, family = binomial)
+summary(glm.fit)
+
+glm.fit <- glm(day28flag ~ km.res.cluster.x, data = adjustable_factors, family = binomial)
+summary(glm.fit)
+
+glm.fit <- glm(day28flag ~ km.res.cluster.x + GENDER + age + ETHNICITY + `50912_median`, data = adjustable_factors, family = binomial)
+summary(glm.fit)
+```
+
+
+```{r}
+library(tableone)
+
+adjustable_factors$Cluster <- adjustable_factors$km.res.cluster.x
+adjustable_factors$km.res.cluster.x <- NULL
+
+adjustable_factors$Creatinine <- adjustable_factors$`50912_median`
+adjustable_factors$`50912_median` <- NULL
+
+adjustable_factors$WBC <- adjustable_factors$`51300_median`
+adjustable_factors$`51300_median` <- NULL
+
+adjustable_factors$Hemoglobin <- adjustable_factors$`50811_median`
+adjustable_factors$`50811_median` <- NULL
+
+adjustable_factors$Hematocrit <- adjustable_factors$`51221_median`
+adjustable_factors$`51221_median` <- NULL
+
+adjustable_factors$Platelet <- adjustable_factors$`51265_median`
+adjustable_factors$`51265_median` <- NULL
+
+adjustable_factors$Sodium <- adjustable_factors$`50983_median`
+adjustable_factors$`50983_median` <- NULL
+
+adjustable_factors$Potassium <- adjustable_factors$`50971_median`
+adjustable_factors$`50971_median` <- NULL
+
+adjustable_factors$Chloride <- adjustable_factors$`50902_median`
+adjustable_factors$`50902_median` <- NULL
+
+adjustable_factors$Bicarbonate <- adjustable_factors$`50882_median`
+adjustable_factors$`50882_median` <- NULL
+
+adjustable_factors$Urea_Nitrogen <- adjustable_factors$`51006_median`
+adjustable_factors$`51006_median` <- NULL
+
+adjustable_factors$Albumin <- adjustable_factors$`50862_median`
+adjustable_factors$`50862_median` <- NULL
+
+adjustable_factors$Temp <- adjustable_factors$`Temperature C (calc)_median`
+adjustable_factors$`Temperature C (calc)_median` <- NULL
+
+
+
+
+
+
+adjustable_factors$age <- as.numeric(as.character(adjustable_factors$age))
+
+listVars <- c("age", "GENDER", "ETHNICITY", "Creatinine", "WBC","Hemoglobin","Hematocrit","Platelet","Sodium","Chloride","Bicarbonate","Urea_Nitrogen","Albumin","Temp","Manual BP [Diastolic]_median","Arterial Blood Pressure systolic_median","Spont RR_median","Mixed Venous O2% Sat_median","ADMISSION_TYPE", "hiv","hypertension", "chf", "diabetes", "chroniclung", "liver", "pvd")
+
+catVars <- c("GENDER","ETHNICITY","ADMISSION_TYPE","CURR_SERVICE","hiv","hypertension", "chf", "diabetes", "chroniclung", "liver", "pvd")
+
+table1 <- CreateTableOne(vars = listVars, data = adjustable_factors, factorVars = catVars, strata = "Cluster")
+table1
+
+
+#t.test(adjustable_factors$age ~ adjustable_factors$km.res.cluster.x, mu =0, alt="two.sided")
+
+#sd(adjustable_factors[adjustable_factors$km.res.cluster.x == 1,]$age)
+
+#sd(adjustable_factors[adjustable_factors$km.res.cluster.x == 2,]$age)
+
+#t.test(adjustable_factors$GENDER ~ adjustable_factors$km.res.cluster.x, mu =0, alt="two.sided")
+glm.fit <- glm(day28flag ~ Cluster + GENDER + age + ETHNICITY + Creatinine, data = adjustable_factors, family = binomial)
+summary(glm.fit)
+
+
+```
+
+
+
+

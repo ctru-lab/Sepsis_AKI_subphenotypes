@@ -1,0 +1,549 @@
+
+AKI TAKE 2 - 4389 SUBJECTS
+martin method to identify patients with sepsis,  extracted 4389 unique subjects from MIMIC with both sepsis and aki (kdigo_48hr)
+Martin method : https://github.com/MIT-LCP/mimic-code/tree/master/concepts/sepsis
+
+1. Take aki 1 and sepsis 1
+
+DROP MATERIALIZED VIEW IF EXISTS aki_martinsepsis CASCADE;
+CREATE MATERIALIZED VIEW  aki_martinsepsis
+  as
+select m.subject_id, m.hadm_id, k.icustay_id, k.aki_48hr, m.sepsis
+
+from martin_sepsis m
+
+inner join icustays i
+
+on m.hadm_id=i.hadm_id
+
+inner join kdigo_stages_48hr k
+
+on k.icustay_id=i.icustay_id
+
+where k.aki_48hr = '1'
+
+and m.sepsis ='1';
+
+
+
+\copy (SELECT * FROM aki_martinsepsis) TO '/Users/aineduffy/Documents/MIMIC_PROJECT/aki_taketwo/aki_martinsepsis.csv' DELIMITER ',' CSV HEADER; 
+ 
+2.Take patients over age 18 and who stayed for longer than a day -  4055 SUBJECTS
+	
+
+DROP MATERIALIZED VIEW IF EXISTS martin_aki_adults_over24 CASCADE;
+CREATE MATERIALIZED VIEW martin_aki_adults_over24 as
+
+WITH time AS
+(
+SELECT ad.subject_id, ad.hadm_id, ad.admittime, ad.dischtime, EXTRACT(epoch FROM ((ad.dischtime)-(ad.admittime)))/3600 as hours FROM admissions ad
+)
+, first_admission_time AS
+(
+SELECT p.subject_id, p.dob, p.gender
+, MIN (a.admittime) AS first_admittime
+, MIN( ROUND( (cast(admittime as date) - cast(dob as date)) / 365.242,2) )
+AS first_admit_age
+FROM patients p
+INNER JOIN admissions a
+ON p.subject_id = a.subject_id
+GROUP BY p.subject_id, p.dob, p.gender
+ORDER BY p.subject_id
+)
+, age as
+(
+SELECT subject_id, dob, gender
+, first_admittime, first_admit_age
+, CASE
+-- all ages > 89 in the database were replaced with 300
+-- we check using > 100 as a conservative threshold to ensure we capture all these patients
+WHEN first_admit_age > 100
+then '>89'
+WHEN first_admit_age >= 18
+THEN 'adult'
+WHEN first_admit_age <= 1
+THEN 'neonate'
+ELSE 'middle'
+END AS age_group
+FROM first_admission_time
+)
+SELECT k.aki_48hr, k.icustay_id, k.subject_id, f.age_group, t.hours
+FROM time t
+INNER JOIN age f
+ON f.subject_id=t.subject_id
+INNER JOIN aki_martinsepsis k
+ON k.subject_id = t.subject_id
+WHERE t.hours >=24
+AND f.age_group = 'adult';
+
+
+3A. Get subjects diagnosed with esrd, icd 9 code 5856 and on one of the following procedures : '5498', '3995','3942','3943'--- 373 unique subjects
+
+3942 - Revision of arteriovenous shunt for renal dialysis
+3943 - Removal of arteriovenous shunt for renal dialysis
+ 3995 - Hemodialysis
+5498  - Peritoneal dialysis 
+
+DROP MATERIALIZED VIEW IF EXISTS martin_esrdwithprocd;
+
+CREATE MATERIALIZED VIEW martin_esrdwithprocd as
+
+SELECT k.icustay_id, k.aki_48hr, k.subject_id, p.icd9_code
+
+FROM martin_aki_adults_over24 k
+
+INNER JOIN diagnoses_icd d
+
+ON d.subject_id = k.subject_id
+
+INNER JOIN procedures_icd p
+
+ON p.subject_id = k.subject_id
+
+and k.aki_48hr = '1'
+
+And d.icd9_code = '5856'
+
+and p.icd9_code  in ('5498', '3995','3942','3943');
+
+
+\copy (SELECT * FROM martin_esrdwithprocd) TO '/Users/aineduffy/Documents/MIMIC_PROJECT/aki_taketwo/martin_esrdwithprocd.csv' DELIMITER ',' CSV HEADER; 
+
+\copy (SELECT * FROM martin_aki_adults_over24) TO '/Users/aineduffy/Documents/MIMIC_PROJECT/aki_taketwo/martin_aki_adults_over24.csv' DELIMITER ',' CSV HEADER; 
+
+
+
+3B. Remove any patients with esrd and on one of procedure treatments from aki patients  -3682 subjects left 
+
+ ##awk -F ',' 'NR==FNR{a[$3]; next}!($3 in a)' martin_esrdwithprocd.csv martin_aki_adults_over24.csv | awk -F ',' '{print $3}'|sort |uniq -c |wc -l##
+
+awk -F ',' 'NR==FNR{a[$3]; next}!($3 in a)' martin_esrdwithprocd.csv martin_aki_adults_over24.csv > martin_aki_esrdandproc_removed
+
+
+DROP TABLE IF EXISTS martin_aki_esrdandproc_removed;
+CREATE TABLE martin_aki_esrdandproc_removed
+(aki_48hr INT NOT NULL,icustay_id INT NOT NULL, subject_id INT NOT NULL, age_group character varying, hours double precision);                                                       
+
+(subject_id INT NOT NULL, hadm_id INT NOT NULL, sodium_155_prim_sec);
+
+\COPY martin_aki_esrdandproc_removed FROM '/Users/aineduffy/Documents/MIMIC_PROJECT/aki_taketwo/martin_aki_esrdandproc_removed' DELIMITER ',' csv header NULL ''
+
+4. Subject, icustay and high creat time
+
+DROP MATERIALIZED VIEW IF EXISTS martin_creattime;
+
+CREATE MATERIALIZED VIEW martin_creattime as
+ select m.icustay_id, m.subject_id, k.highcreat48hrtime, i.hadm_id
+from martin_aki_esrdandproc_removed m 
+inner join kdigo_stages_48hr k
+on m.icustay_id=k.icustay_id
+Inner join icustays I 
+on m.icustay_id=I.icustay_id;
+
+
+5. Get one entry for subject, taking their minimum highest creat time
+
+
+DROP MATERIALIZED VIEW IF EXISTS martin_creattime_dates;
+
+CREATE MATERIALIZED VIEW martin_creattime_dates as
+
+With te as (Select m.icustay_id, m.hadm_id, m.subject_id, m.highcreat48hrtime
+From martin_creattime m
+Inner join (
+	select subject_id, min(highcreat48hrtime) highcreat48hrtime
+	from Martin_creattime
+	where highcreat48hrtime is not null
+	group by subject_id) b on m.subject_id=b.subject_id and m.highcreat48hrtime=b.highcreat48hrtime)
+SELECT DISTINCT ON (icustay_id, hadm_id, subject_id, highcreat48hrtime) * FROM te
+
+
+\copy (SELECT * FROM martin_creattime_dates) TO '/Users/aineduffy/Documents/MIMIC_PROJECT/aki_taketwo/martin_creattime_dates.csv' DELIMITER ',' CSV HEADER; 
+
+
+-admission info, 
+
+select m.subject_id, m.hadm_id, m.icustay_id, a.admission_type, a.admission_location, a.ethnicity, a. hospital_expire_flag from admissions
+a
+inner join martin_creattime_dates m
+on a.hadm_id = m.hadm_id
+;
+
+
+
+6. ----ICD9 DIAG
+
+DROP MATERIALIZED VIEW IF EXISTS martin_aki_icd9_diagnoses;
+
+CREATE MATERIALIZED VIEW Martin_aki_icd9_diagnoses as
+
+select m.subject_id, m.hadm_id, d.icd9_code             
+from martin_creattime_dates m
+inner join diagnoses_icd d
+on m.hadm_id=d.hadm_id
+;
+
+
+\copy (SELECT * FROM martin_aki_icd9_diagnoses) TO '/Users/aineduffy/Documents/MIMIC_PROJECT/aki_taketwo/martin_aki_icd9_diagnoses.csv' DELIMITER ',' CSV HEADER; 
+
+7. ####ICD9 PROC
+
+CREATE MATERIALIZED VIEW martin_aki_icd9_procedures as                                                                                                  
+select m.subject_id, m.hadm_id, d.icd9_code             
+from martin_creattime_dates m
+inner join procedures_icd d
+on m.hadm_id=d.hadm_id
+;
+
+\copy (SELECT * FROM martin_aki_icd9_procedures) TO '/Users/aineduffy/Documents/MIMIC_PROJECT/aki_taketwo/martin_aki_icd9_procedures.csv' DELIMITER ',' CSV HEADER; 
+
+
+##MICRO -results - when charttime was before highest creat time
+
+
+Drop materialized view if exists martin_akipatients_micro; 
+Create materialized view martin_akipatients_micro as 
+With micro as (
+
+select a.hadm_id,a.subject_id, a.highcreat48hrtime, m.charttime, m.spec_itemid, m.spec_type_desc, m.org_itemid, m.org_name
+
+from martin_creattime_dates a                                                          
+
+inner join microbiologyevents m
+
+on a.hadm_id=m.hadm_id
+
+WHERE m.charttime <= a.highcreat48hrtime )
+
+Select * from micro m; 
+
+;
+
+
+
+
+-patients over age 18 and who stayed for longer than a day
+- Remove any patients with esrd and on one of procedure treatments from aki patient
+-if multiple icu admissions then take first admissionx` (minimum highest creat time)
+
+Headings from previous files
+Micro
+hadm_id,subject_id,spec_itemid,spec_type_desc,org_itemid,label
+/hadm_id subject_id highcreat48hrtime charttime org_itemid label/
+hadm_id,subject_id,highcreat48hrtime,charttime,spec_itemid,spec_type_desc,org_itemid,org_name
+
+
+Extended chart
+subject_id,hadm_id,itemid,label,value,charttime,highcreat48hrtime,highcreat_addedtime
+
+subject_id dob gender ethnicity high_creattime highcreat_age
+hadm_id cpt_cd subject_id
+hadm_id icd9_code subject_id -aki_patients_icd9diagn.csv /prcoes
+
+subject_id hadm_id deathtime highcreat48hrtime dischtime dod_ssn dod_hosp expire_flag days_ssn days_hosp
+
+
+7.Extended chart 5
+
+Drop materialized view if exists martin_akipatients_chart_extended_5; 
+Create materialized view martin_akipatients_chart_extended_5 as With chart as (select a.subject_id, a.hadm_id, c.itemid, d.label, c.value, c.charttime, a.highcreat48hrtime 
+from  martin_creattime_dates a
+inner join chartevents c
+on a.hadm_id = c.hadm_id
+and a.subject_id = c.subject_id
+Inner join  d_items d 
+On d.itemid=c.itemid
+where d.itemid in ('591','6','51','442','455','645','676', '677', '678', '679', '8368', '8440', '8441', '8555', '6701', '224027', '224167', '227242', '227243', '224767', '224643 ','220050', '220051', '220179', '220180', '226329', '223761', '223762', '225309', '225310',
+'615', '618', '651', '224689', '224690','224422','220210',
+'146',  '148', '149',  '150',  '152', '227124', '224191', '227290', '224135', '224153',  '227753', '225740', '228006', '225976','226118', '225954','225956', '226499', '225126',
+'834', '228232', '220227', '220277',
+'838', '664', '822', '823', '6860', '225674', '223772',
+'227549', '227686',
+'39','631', '684', '720', '721', '722', '732', '225411', '227061', '227565','227566', '227810','223840', '223848', '223849',
+'504', '211','220045','220074', '223771'
+)), timeext as
+(Select a.subject_id, a.hadm_id, a.itemid, a.label, a.value, a.charttime, a.highcreat48hrtime, (a.highcreat48hrtime + interval '48 hours') as highcreat_addedtime FROM chart a)
+select * from timeext
+Where charttime <= highcreat_addedtime;
+
+\copy (SELECT * FROM martin_akipatients_diedafter30) TO '/Users/aineduffy/Documents/MIMIC_PROJECT/aki_taketwo/martin_akipatients_diedafter30.csv' DELIMITER ' ' CSV HEADER;
+
+8a ##DIED AFTER 30 DAYS
+
+Drop materialized view if exists martin_akipatients_diedafter30;
+Create materialized view martin_akipatients_diedafter30 as
+With time as (select a.subject_id, a.hadm_id, h.deathtime, a.highcreat48hrtime,h.dischtime, p.dod_ssn,  p.dod_hosp, p.expire_flag 
+
+from martin_creattime_dates a
+
+inner join admissions h 
+
+on a.hadm_id=h.hadm_id and a.subject_id = h.subject_id
+
+Inner join patients p
+
+On p.subject_id=a.subject_id)       
+
+, hoss as
+
+(                                                                         
+
+Select h.subject_id, h.hadm_id, h.deathtime, h.highcreat48hrtime,h.dischtime, h.dod_ssn, h. dod_hosp, h.expire_flag,
+
+EXTRACT(epoch FROM ((h.dod_ssn)-(h.dischtime)))/86400 as days_ssn FROM time h ), ho as
+
+(Select h.subject_id, h.hadm_id, h.deathtime, h.highcreat48hrtime,h.dischtime, h.dod_ssn, h. dod_hosp, h.expire_flag, h.days_ssn,
+
+EXTRACT(epoch FROM ((h.dod_hosp)-(h.dischtime)))/86400 as days_hosp FROM hoss h )
+
+Select * from ho
+where deathtime is null and days_ssn > 30
+
+or days_hosp >30;
+
+\copy (SELECT * FROM martin_akipatients_chart_extended_5) TO '/Users/aineduffy/Documents/MIMIC_PROJECT/aki_taketwo/martin_akipatients_chart_extended_5.csv' DELIMITER ' ' CSV HEADER;
+
+
+AT HOSP : 
+
+Drop materialized view if exists martin_akipatients_diedhosp;
+Create materialized view martin_akipatients_diedhosp as
+With time as (select a.subject_id, a.hadm_id, h.deathtime, a.highcreat48hrtime,h.dischtime, p.dod_ssn,  p.dod_hosp, p.expire_flag 
+
+from martin_creattime_dates a
+
+inner join admissions h 
+
+
+on a.hadm_id=h.hadm_id and a.subject_id = h.subject_id
+
+Inner join patients p
+
+On p.subject_id=a.subject_id)       
+
+, hoss as
+
+(                                                                         
+
+Select h.subject_id, h.hadm_id, h.deathtime, h.highcreat48hrtime,h.dischtime, h.dod_ssn, h. dod_hosp, h.expire_flag,
+
+EXTRACT(epoch FROM ((h.dod_ssn)-(h.dischtime)))/86400 as days_ssn FROM time h ), ho as
+
+(Select h.subject_id, h.hadm_id, h.deathtime, h.highcreat48hrtime,h.dischtime, h.dod_ssn, h. dod_hosp, h.expire_flag, h.days_ssn,
+
+EXTRACT(epoch FROM ((h.dod_hosp)-(h.dischtime)))/86400 as days_hosp FROM hoss h )
+
+
+Select * from ho 
+
+where deathtime is not null 
+
+or days_hosp < 1 or days_ssn < 1;
+
+\copy (SELECT * FROM martin_akipatients_diedhosp) TO '/Users/aineduffy/Documents/MIMIC_PROJECT/aki_taketwo/martin_akipatients_diedhosp.csv' DELIMITER ' ' CSV HEADER;
+
+
+WITHIN 30 DAYS:
+Drop materialized view if exists martin_akipatients_within30;
+Create materialized view martin_akipatients_within30 as
+With time as (select a.subject_id, a.hadm_id, h.deathtime, a.highcreat48hrtime,h.dischtime, p.dod_ssn,  p.dod_hosp, p.expire_flag 
+
+from martin_creattime_dates a
+
+inner join admissions h 
+
+on a.hadm_id=h.hadm_id and a.subject_id = h.subject_id
+
+Inner join patients p
+
+On p.subject_id=a.subject_id)       
+
+, hoss as
+
+(                                                                         
+
+Select h.subject_id, h.hadm_id, h.deathtime, h.highcreat48hrtime,h.dischtime, h.dod_ssn, h. dod_hosp, h.expire_flag,
+
+EXTRACT(epoch FROM ((h.dod_ssn)-(h.dischtime)))/86400 as days_ssn FROM time h ), ho as
+
+(Select h.subject_id, h.hadm_id, h.deathtime, h.highcreat48hrtime,h.dischtime, h.dod_ssn, h. dod_hosp, h.expire_flag, h.days_ssn,
+
+EXTRACT(epoch FROM ((h.dod_hosp)-(h.dischtime)))/86400 as days_hosp FROM hoss h )
+
+Select * from ho                                             
+
+where deathtime is null and days_ssn between 1 and 30
+
+or days_hosp between 1 and 30;
+
+
+\copy (SELECT * FROM martin_akipatients_within30) TO '/Users/aineduffy/Documents/MIMIC_PROJECT/aki_taketwo/martin_akipatients_within30.csv' DELIMITER ' ' CSV HEADER;
+
+
+
+
+
+WITHIN 90 DAYS;
+
+Drop materialized view if exists martin_akipatients_within90;
+Create materialized view martin_akipatients_within90 as
+With time as (select a.subject_id, a.hadm_id, h.deathtime, a.highcreat48hrtime,h.dischtime, p.dod_ssn,  p.dod_hosp, p.expire_flag 
+
+from martin_creattime_dates a
+
+inner join admissions h 
+
+on a.hadm_id=h.hadm_id and a.subject_id = h.subject_id
+
+Inner join patients p
+
+On p.subject_id=a.subject_id)       
+
+, hoss as
+
+(                                                                         
+
+Select h.subject_id, h.hadm_id, h.deathtime, h.highcreat48hrtime,h.dischtime, h.dod_ssn, h. dod_hosp, h.expire_flag,
+
+EXTRACT(epoch FROM ((h.dod_ssn)-(h.dischtime)))/86400 as days_ssn FROM time h ), ho as
+
+(Select h.subject_id, h.hadm_id, h.deathtime, h.highcreat48hrtime,h.dischtime, h.dod_ssn, h. dod_hosp, h.expire_flag, h.days_ssn,
+
+EXTRACT(epoch FROM ((h.dod_hosp)-(h.dischtime)))/86400 as days_hosp FROM hoss h )
+
+Select * from ho                                             
+
+where deathtime is null and days_ssn between 1 and 90
+
+or days_hosp between 1 and 90;
+
+\copy (SELECT * FROM martin_akipatients_within90) TO '/Users/aineduffy/Documents/MIMIC_PROJECT/aki_taketwo/martin_akipatients_within90.csv' DELIMITER ' ' CSV HEADER;
+
+
+
+
+
+
+ALIVE : 
+
+Drop materialized view if exists martin_akipatients_alive;
+Create materialized view martin_akipatients_alive as
+With time as (select a.subject_id, a.hadm_id, h.deathtime, a.highcreat48hrtime,h.dischtime, p.dod_ssn,  p.dod_hosp, p.expire_flag 
+
+from martin_creattime_dates a
+
+inner join admissions h 
+
+on a.hadm_id=h.hadm_id and a.subject_id = h.subject_id
+
+Inner join patients p
+
+On p.subject_id=a.subject_id)       
+
+, hoss as
+
+(                                                                         
+
+Select h.subject_id, h.hadm_id, h.deathtime, h.highcreat48hrtime,h.dischtime, h.dod_ssn, h. dod_hosp, h.expire_flag,
+
+EXTRACT(epoch FROM ((h.dod_ssn)-(h.dischtime)))/86400 as days_ssn FROM time h ), ho as
+
+(Select h.subject_id, h.hadm_id, h.deathtime, h.highcreat48hrtime,h.dischtime, h.dod_ssn, h. dod_hosp, h.expire_flag, h.days_ssn,
+
+EXTRACT(epoch FROM ((h.dod_hosp)-(h.dischtime)))/86400 as days_hosp FROM hoss h )
+
+Select * from ho                                                                      
+where days_hosp is null 
+
+and days_ssn is null;
+
+\copy (SELECT * FROM martin_akipatients_alive) TO '/Users/aineduffy/Documents/MIMIC_PROJECT/aki_taketwo/martin_akipatients_alive.csv' DELIMITER ' ' CSV HEADER;
+
+
+
+
+
+
+LOS 
+Drop materialized view if exists martin_akipatients_los;
+Create materialized view martin_akipatients_los as
+With los as (select a.admittime, a.dischtime, m.subject_id, m.hadm_id,m.highcreat48hrtime
+from admissions a
+inner join martin_creattime_dates m
+on a.hadm_id =m.hadm_id)
+select hadm_id, age(dischtime, admittime) as los from los;
+
+\copy (SELECT * FROM martin_akipatients_los) TO '/Users/aineduffy/Documents/MIMIC_PROJECT/aki_taketwo/martin_akipatients_los.csv' DELIMITER ' ' CSV HEADER;
+
+
+DIALYSIS 
+
+
+Drop materialized view if exists martin_akipatients_dialysis;
+Create materialized view martin_akipatients_dialysis as
+
+select a.icd9_code, m.subject_id, m.hadm_id, d.short_title
+from procedures_icd a
+inner join martin_creattime_dates m
+on a.hadm_id =m.hadm_id
+Inner join d_icd_procedures d
+On a.icd9_code = d.icd9_code
+Where d.icd9_code in ('3995','5498')
+
+;
+
+\copy (SELECT * FROM martin_akipatients_dialysis) TO '/Users/aineduffy/Documents/MIMIC_PROJECT/aki_taketwo/martin_akipatients_dialysis.csv' DELIMITER ',' CSV HEADER;
+
+
+
+With fas as (
+select a.icd9_code, m.subject_id, m.hadm_id, d.short_title
+from procedures_icd a
+inner join martin_creattime_dates m
+on a.hadm_id =m.hadm_id
+Inner join d_icd_procedures d
+On a.icd9_code = d.icd9_code
+Where d.icd9_code in ('3995','5498')) select count(subject_id), short_title from fas group by short_title
+;
+
+With diagnoses as (
+Select p.icd9_code, p.short_title, d.hadm_id
+from  diagnoses_icd d 
+Inner join d_icd_diagnoses p
+On p.icd9_code = d.icd9_code
+Inner join 
+Where d.icd9_code in ('V561','V560')), procedures as 
+(Select p.icd9_code, p.short_title, d.hadm_id
+
+
+Select * from diagnoses
+;
+
+
+With proces 
+SELECT count(k.hadm_id), p.icd9_code, l.short_title, d.icd9_code
+
+FROM martin_creattime_dates k
+
+INNER JOIN diagnoses_icd d
+
+ON d.hadm_id = k.hadm_id
+
+INNER JOIN procedures_icd p
+
+ON p.hadm_id = k.hadm_id
+
+INNER JOIN d_icd_procedures l
+
+On l.icd9_code=p.icd9_code
+
+Where d.icd9_code in ('V561','V560')
+
+Or p.icd9_code  in ('5498', '3995')
+
+Group by p.icd9_code, l.short_title, d.icd9_code;
+
+
+
+
+
