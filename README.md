@@ -2,4 +2,8 @@
 Deep learning identifies novel subphenotypes in sepsis-associated acute kidney injury
 
 
-Author: Ross O'Hagan
+Contributors: 
+
+Ross O'Hagan;
+Aine Duffy;
+Kumardeep Chaudhary
